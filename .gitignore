@@ -1,0 +1,11 @@
+# Spin output files
+*.out
+*.tmp
+*.exe
+*.p
+*.t
+*.m
+*.b
+*.h
+*.c
+*.sel
