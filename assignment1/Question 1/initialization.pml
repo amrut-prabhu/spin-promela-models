@@ -32,13 +32,13 @@ mtype client_status[3] = DISCONNECTED;
 proctype Client(byte id)
 {
   // TODO: Should have its own status?
-  mtype req, resp;
 
-  do 
+  L1: do 
     /* Step 1. Connection request */
     :: (client_status[id] == DISCONNECTED) -> 
         cm_chan ! CONNECT_REQ, id, 0; // Dummy val 
 
+        mtype resp;
         client_chan[id] ? resp;
         if
         :: (resp == NACK) -> client_status[id] = DISCONNECTED;
@@ -46,7 +46,13 @@ proctype Client(byte id)
         fi
 
     :: (client_status[id] == PRE_INITIALIZING  || client_status[id] == INITIALIZING) ->
-        client_chan[id] ? req;
+        mtype req;
+        // do
+        // :: client_chan[id] ? req
+        // :: timeout -> break
+        // od
+        /* needs timeout for the case when CM disconnects client (if isSuccessful is 0) */
+        client_chan[id] ? req; 
 
         byte isSuccessful = 100;
         do
@@ -62,11 +68,13 @@ proctype Client(byte id)
         if
         /* Step 4a. Client response to Get New Weather info */
         :: (req == GET_NEW_WEATHER_REQ) -> 
-            cm_chan ! GET_NEW_WEATHER_RESP, id, 1;
+            cm_chan ! GET_NEW_WEATHER_RESP, id, isSuccessful;
 
         /* Step 5. Client response to Get New Weather info */
         :: (req == USE_NEW_WEATHER_REQ) -> 
-            cm_chan ! USE_NEW_WEATHER_RESP, id, 1;
+            cm_chan ! USE_NEW_WEATHER_RESP, id, isSuccessful;
+        
+        :: (req == NACK) -> goto L1
         fi
 
     :: else ->
@@ -106,6 +114,7 @@ proctype CM()
               client_status[client_id] = POST_INITIALIZING;
 
           :: else ->
+              client_chan[client_id] ! NACK; //
               client_status[client_id] = DISCONNECTED;
               cm_status = IDLE;
           fi
