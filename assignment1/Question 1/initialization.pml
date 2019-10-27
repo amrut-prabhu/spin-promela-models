@@ -1,11 +1,23 @@
 mtype = { 
-  IDLE, /* CM */ 
-  PRE_INITIALIZING, INITIALIZING, POST_INITIALIZING, /* CM, Client */ 
-  CONNECTED, DISCONNECTED, /* Client */
-  ENABLED, DISABLED, /* WCP */
+  /*14*/ IDLE, /* CM and for connected clients*/
+  /*13*/ PRE_INITIALIZING,
+  /*12*/ INITIALIZING,
+  /*11*/ POST_INITIALIZING,
 
-  CONNECT_REQ, GET_NEW_WEATHER_REQ, GET_NEW_WEATHER_RESP, USE_NEW_WEATHER_REQ, USE_NEW_WEATHER_RESP,
-  ACK, NACK,
+  /*10*/ DISCONNECTED, 
+
+  /* WCP */ 
+  /*9*/ ENABLED, 
+  /*8*/ DISABLED, 
+
+  /*7*/ CONNECT_REQ, 
+  /*6*/ GET_NEW_WEATHER_REQ, 
+  /*5*/ GET_NEW_WEATHER_RESP, 
+  /*4*/ USE_NEW_WEATHER_REQ, 
+  /*3*/ USE_NEW_WEATHER_RESP,
+
+  /*2*/ ACK, 
+  /*1*/ NACK,
 }
 
 /* Each client uses one data channel and one ack channel for communication with WCP*/
@@ -23,21 +35,22 @@ proctype Client(byte id)
   mtype req, resp;
 
   do 
+    /* Step 1. Connection request */
     :: (client_status[id] == DISCONNECTED) -> 
-        cm_chan ! CONNECT_REQ, id; /* Connection request */
+        cm_chan ! CONNECT_REQ, id, 0; // Dummy val 
 
         client_chan[id] ? resp;
-        (resp == NACK) -> client_status[id] = DISCONNECTED
+        if
+        :: (resp == NACK) -> client_status[id] = DISCONNECTED;
+        :: (resp == ACK) -> client_status[id] = PRE_INITIALIZING;
+        fi
 
-    :: (client_status[id] == PRE_INITIALIZING 
-          || client_status[id] == INITIALIZING 
-          || client_status[id] == POST_INITIALIZING) ->
-
+    :: (client_status[id] == PRE_INITIALIZING  || client_status[id] == INITIALIZING) ->
         client_chan[id] ? req;
 
-        byte isSuccessful = -1;
+        byte isSuccessful = 100;
         do
-        :: isSuccessful == -1 ->
+        :: isSuccessful == 100 ->
             if
             :: isSuccessful = 1
             :: isSuccessful = 0
@@ -47,20 +60,24 @@ proctype Client(byte id)
         od
 
         if
+        /* Step 4a. Client response to Get New Weather info */
         :: (req == GET_NEW_WEATHER_REQ) -> 
-            cm_chan ! GET_NEW_WEATHER_RESP, id, isSuccessful;
+            cm_chan ! GET_NEW_WEATHER_RESP, id, 1;
 
+        /* Step 5. Client response to Get New Weather info */
         :: (req == USE_NEW_WEATHER_REQ) -> 
-            cm_chan ! USE_NEW_WEATHER_RESP, id, isSuccessful;
-
+            cm_chan ! USE_NEW_WEATHER_RESP, id, 1;
         fi
-        // TODO: Timeouts for all receives?
+
+    :: else ->
+        ;
+		// break
   od
 }
 
 proctype CM()
 {
-  byte client_id = -1;
+  byte client_id = 100;
   
   mtype req;
   byte id, val;
@@ -68,6 +85,7 @@ proctype CM()
   do
   :: cm_chan ? req, id, val -> 
       if 
+      /* Step 2. Connection response */
       :: (req == CONNECT_REQ) ->
           if :: (cm_status == IDLE) -> 
               cm_status = PRE_INITIALIZING;
@@ -80,7 +98,8 @@ proctype CM()
               client_chan[id] ! NACK;
           fi
 
-      :: (req == INITIALIZING && id == client_id) ->
+      /* Step 4b. CM action to client response for Get New Weather info */
+      :: (cm_status == INITIALIZING && id == client_id && req == GET_NEW_WEATHER_RESP) ->
           if :: (val == 1) ->
               client_chan[client_id] ! USE_NEW_WEATHER_REQ;
               cm_status = POST_INITIALIZING;
@@ -91,28 +110,34 @@ proctype CM()
               cm_status = IDLE;
           fi
 
-      :: (req == POST_INITIALIZING && id == client_id) ->
+      /* Step 5b. CM action to client response for Get New Weather info */
+      :: (cm_status == POST_INITIALIZING && id == client_id && req == USE_NEW_WEATHER_RESP) ->
           if :: (val == 1) ->
               cm_status = IDLE;
               client_status[client_id] = IDLE;
               wcp_status = ENABLED;
+              client_id = 100;
 
           :: else ->
               client_status[client_id] = DISCONNECTED;
               wcp_status = ENABLED;
               cm_status = IDLE;
+              client_id = 100;
           fi
 
       fi
 
+  /* Step 3. Pre-init Get New Weather info */
   :: (cm_status == PRE_INITIALIZING) ->
       client_chan[client_id] ! GET_NEW_WEATHER_REQ;
       cm_status = INITIALIZING;
       client_status[client_id] = INITIALIZING;
 
-  // :: timeout -> ackchan!in
-  /* :: timeout -> break 
-  A more traditional use is to place a timeout as an alternative to a potentially blocking statement, to guard against a system deadlock if the statement becomes permanently blocked.
+  // TODO: Timeouts for all receives?
+  /* 
+  :: timeout -> break 
+  A more traditional use is to place a timeout as an alternative to a potentially blocking statement, 
+  to guard against a system deadlock if the statement becomes permanently blocked.
   */
   od
 }
