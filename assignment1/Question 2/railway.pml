@@ -1,0 +1,244 @@
+mtype = { 
+  STATIONARY,
+  TRAVELLING,
+  
+  REFUSE,
+  OFFER,
+
+  NEW_ORDER,
+  ASSIGN_ORDER,
+}
+
+#define LEFT -1
+#define RIGHT 1
+#define NONE 0
+
+#define NUM_STATIONS 6;
+#define NUM_SHUTTLES 3;
+#define NUM_ORDERS 2 
+
+#define DUMMY_VAL 100
+
+typedef Travel {
+	byte start; // start station (1-6)
+  int dir; // direction (1, 0, -1)
+};
+Travel shuttle_travel[NUM_SHUTTLES];
+
+typedef Order {
+  byte start;
+  byte dest;
+  byte size;
+}
+
+chan system_chan = [1] of { mtype, byte, Order, int };
+chan shuttle_chan[NUM_SHUTTLES] = [1] of { mtype, Order };
+
+inline abs_diff(a, b) {
+  if :: (a > b) ->
+    diff = a - b;
+  :: else ->
+    diff = b - a;
+  fi
+}
+
+inline remainder(x, y, z) {
+  if :: (x < 0) ->
+    z = ((x + y) % y);
+  :: else ->
+    z = x % y;
+  fi
+}
+
+// inline min(x, y, z) {
+//   if :: (x < y) ->
+//     z = x;
+//   :: else ->
+//     z = y;
+//   fi
+// }
+
+inline set_direction(start, dest, dir) {
+  remainder((start - dest), NUM_STATIONS, i);
+  remainder((dest - start), NUM_STATIONS, j);
+
+  if 
+  :: (i < j) ->
+    dir = LEFT;
+  :: (j < i) ->
+    dir = RIGHT;
+  fi
+}
+
+inline get_distance(start, dest) {
+  remainder((start - dest), NUM_STATIONS, i);
+  remainder((dest - start), NUM_STATIONS, j);
+
+  if :: (i < j) ->
+    distance = i;
+  :: else ->
+    distance = j;
+  fi
+}
+
+proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
+  byte id = idx - 1;
+  byte curr_station = start_station;
+  int load;
+  mtype status = STATIONARY;
+  Order orders[NUM_ORDERS]; // Number of orders assigned to system is not limited; No need for modulo
+  byte num_orders = 0;
+  byte curr_order = 0;
+
+  byte distance, i, j;
+  bool are_passengers_loaded = false; 
+  bool can_travel = true;
+  mtype msg;
+  Order o;
+  int payment;
+
+  shuttle_travel[id].start = start_station;
+  shuttle_travel[id].dir = NONE;
+
+  do
+  :: shuttle_chan[id] ? msg, o ->
+    if 
+    /* Process and send offer for new order */
+    :: (msg == NEW_ORDER) ->
+      byte i;
+      byte j;
+      get_distance(o.start, curr_station);
+
+      if :: (load + o.size <= capacity && distance <= 2) ->
+        payment = charge * o.size;
+        system_chan ! OFFER, id, o, payment;
+
+      :: else ->
+        system_chan ! REFUSE, id, o, 0;
+      fi
+
+    /* Process assigned order */
+    :: (msg == ASSIGN_ORDER) ->
+      orders[num_orders] = o;
+      num_orders = num_orders + 1;
+    fi
+
+  /* Complete the assigned orders, one at a time */
+  :: (curr_order != num_orders) ->
+    if 
+    /* Load passengers (if possible) from start station */
+    :: curr_station == orders[curr_order].start && !are_passengers_loaded ->
+      (load + orders[curr_order].size <= capacity) -> {
+        load = load + orders[curr_order.size];
+        are_passengers_loaded = true;
+      
+        /* Set direction to travel to dest */      
+        set_direction(curr_station, orders[curr_order].dest, shuttle_travel[id].dir); 
+      }
+
+    /* Unload passengers (if possible) at dest station */
+    :: curr_station == orders[curr_order].dest && are_passengers_loaded ->
+      load = load - orders[curr_order].size;
+
+      status = STATIONARY;
+      shuttle_travel[id].start = curr_station;
+      shuttle_travel[id].dir = NONE;
+
+      curr_order = curr_order + 1;
+      are_passengers_loaded = false;
+    
+    :: else ->
+      /* Set direction to travel to start */      
+      (shuttle_travel[id].dir == NONE) -> 
+        set_direction(curr_station, orders[curr_order].start, shuttle_travel[id].dir); 
+      
+      /* Travel to order start/dest */
+      atomic {
+        can_travel = true;
+        for (i : 0 .. NUM_SHUTTLES-1) {
+          (shuttle_travel[i].start == curr_station 
+            && shuttle_travel[i].dir == shuttle_travel[id].dir) ->
+            can_travel = false;
+        }
+
+        if :: can_travel -> 
+          shuttle_travel[id].start = curr_station;
+
+          // travel and update curr_station to the arriving station
+          remainder(shuttle_travel[id].start + shuttle_travel[id].dir, NUM_STATIONS, curr_station);
+          status = TRAVELLING;
+          :: else
+        fi
+      }
+    fi
+
+  od
+}
+
+proctype send_to_all(msg, o) {
+  for (i : 0 .. NUM_SHUTTLES-1) {
+    shuttle_chan[i] ! msg, o;
+  }
+}
+
+proctype System() {
+  Order o;
+  mtype msg;
+
+  byte i, id, max_id;
+  int max_payment;
+  
+  do
+  :: system_chan ? msg, id, o ->
+    if 
+    /* Inform shuttles of new order */
+    :: (msg == NEW_ORDER) ->
+      send_to_all(NEW_ORDER, o);
+
+      /* Process offers for new order and assign */
+      max_payment = -1;
+      for (i : 0 .. NUM_SHUTTLES-1) {
+        system_chan ? msg, id, o, payment;
+
+        if       
+        :: (msg == OFFER) ->
+          if :: (max_payment == -1) ->
+            max_id = id;
+            max_payment = payment;
+          :: else ->
+            (payment > max_payment) -> // If equal, don't assign to the later offer
+              max_id = id;
+              max_payment = payment;
+          fi
+
+        :: (msg == REFUSE) ->
+          skip;
+        fi
+      }
+
+      shuttle_chan[max_id] ! ASSIGN_ORDER, o;
+    fi
+  od
+}
+
+init {
+  atomic {
+    run System();
+    
+    run Shuttle(1, 1, 5, 2);
+    run Shuttle(2, 1, 8, 4);
+    run Shuttle(3, 2, 10, 3);
+  }
+
+  Order o1;
+  o1.start = 1;
+  o1.dest = 3;
+  o1.size = 4;
+  system_chan ! NEW_ORDER, DUMMY_VAL, o1;
+
+  Order o2;
+  o2.start = 2;
+  o2.dest = 3;
+  o2.size = 1;
+  system_chan ! NEW_ORDER, DUMMY_VAL, o2;
+}
