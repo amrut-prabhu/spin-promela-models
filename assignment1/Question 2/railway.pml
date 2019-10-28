@@ -73,7 +73,7 @@ inline set_direction(s1, d1) {
 
 inline get_distance(abc, xyz) {
   remainder(abc - xyz, 6 , i);
-  remainder(abc - xyz, 6 , j);
+  remainder(xyz - abc, 6 , j);
 
   if :: (i < j) ->
     distance = i;
@@ -282,11 +282,11 @@ init {
   o1.start = 1;
   o1.dest = 3;
   o1.size = 4;
-  system_chan ! NEW_ORDER, DUMMY_VAL , o1;
+  system_chan ! NEW_ORDER, DUMMY_VAL , o1, DUMMY_VAL;
 
   Order o2;
   o2.start = 2;
   o2.dest = 3;
   o2.size = 1;
-  system_chan ! NEW_ORDER, DUMMY_VAL , o2;
+  system_chan ! NEW_ORDER, DUMMY_VAL , o2, DUMMY_VAL;
 }
