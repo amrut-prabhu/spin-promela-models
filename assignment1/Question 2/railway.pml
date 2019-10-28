@@ -150,16 +150,20 @@ proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
     
     :: else ->
       /* Set direction to travel to start */      
-      (shuttle_travel[id].dir == 0 ) -> 
+      if :: (shuttle_travel[id].dir == 0 ) -> 
         set_direction(curr_station, orders[curr_order].start); 
+      :: else
+      fi
       
       /* Travel to order start/dest */
       atomic {
         can_travel = true;
         for (i : 0 .. 3 - 1) {
-          (shuttle_travel[i].start == curr_station 
+          if :: (shuttle_travel[i].start == curr_station 
             && shuttle_travel[i].dir == shuttle_travel[id].dir) ->
             can_travel = false;
+          :: else
+          fi
         }
 
         if :: can_travel -> 
@@ -186,39 +190,72 @@ proctype System() {
   Order o;
   mtype msg;
 
-  byte i, id, max_id;
-  int max_payment, payment;
+  byte i, id, max_id[2], num_responded[2];
+  bool has_assigned[2];
+  int max_payment[2], payment, idx;
+  int num_orders = 0;
+  Order orders[2];
   
   do
-  :: system_chan ? msg, id, o ->
+  :: system_chan ? msg, id, o, payment ->
     if 
     /* Inform shuttles of new order */
     :: (msg == NEW_ORDER) ->
+      orders[num_orders].start = o.start;
+      orders[num_orders].dest = o.dest;
+      orders[num_orders].size = o.size;
+      
+      max_payment[num_orders] = -1;
+      num_responded[num_orders] = 0;
+
+      num_orders = num_orders + 1;
+
       send_to_all(NEW_ORDER, o);
-
-      /* Process offers for new order and assign */
-      max_payment = -1;
-      for (i : 0 .. 3 - 1) {
-        system_chan ? msg, id, o, payment;
-
-        if    
-        :: (msg == OFFER) ->
-          if :: (max_payment == -1) ->
-            max_id = id;
-            max_payment = payment;
-          :: else ->
-            (payment > max_payment) -> // If equal, don't assign to the later offer
-              max_id = id;
-              max_payment = payment;
-          fi
-
-        :: (msg == REFUSE) ->
-          skip;
+      
+    /* Process offers for new order */
+    :: else -> {
+      // Get order index
+      for (i : 0 .. num_orders - 1) {
+        if :: (orders[i].start == o.start 
+          && orders[i].dest == o.dest 
+          && orders[i].size == o.size) ->
+          idx = i;
+        :: else
         fi
       }
 
-      shuttle_chan[max_id] ! ASSIGN_ORDER, o;
+      num_responded[idx] = num_responded[idx] + 1;
+
+      if
+      :: (msg == OFFER) ->
+        if :: (max_payment[idx] == -1) ->
+          max_id[idx] = id;
+          max_payment[idx] = payment;
+        :: else ->
+          if :: (payment > max_payment[idx]) -> // If equal, don't assign to the later offer
+            max_id[idx] = id;
+            max_payment[idx] = payment;
+          :: else
+          fi
+        fi
+
+      :: (msg == REFUSE) ->
+        skip;
+      fi
+    }
+      
     fi
+
+    /* Assign order to an offer */
+    :: (!has_assigned[0] || !has_assigned[1]) ->
+      for (i : 0 .. num_orders - 1) {
+        if :: (num_responded[i] == 3) ->
+          shuttle_chan[max_id[i]] ! ASSIGN_ORDER, orders[i];
+          has_assigned[i] = true;
+        :: else 
+        fi
+      }
+      
   od
 }
 
