@@ -9,13 +9,13 @@ mtype = {
   ASSIGN_ORDER,
 }
 
-#define LEFT -1
-#define RIGHT 1
-#define NONE 0
+// #define LEFT -1
+// #define RIGHT 1
+// #define NONE 0
 
-#define NUM_STATIONS 6;
-#define NUM_SHUTTLES 3;
-#define NUM_ORDERS 2 
+// #define NUM_STATIONS 6;
+// #define NUM_SHUTTLES 3;
+// #define NUM_ORDERS 2 
 
 #define DUMMY_VAL 100
 
@@ -118,6 +118,8 @@ proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
 
     /* Process assigned order */
     :: (msg == ASSIGN_ORDER) ->
+      // printf("num=%d\n", num_orders);
+
       orders[num_orders].start = o.start;
       orders[num_orders].dest = o.dest;
       orders[num_orders].size = o.size;
@@ -136,6 +138,7 @@ proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
         /* Set direction to travel to dest */      
         set_direction(curr_station, orders[curr_order].dest); 
       }
+      // printf("3Shuttle %d: loaded dir=%d\n", id, shuttle_travel[id].dir);
 
     /* Unload passengers (if possible) at dest station */
     :: curr_station == orders[curr_order].dest && are_passengers_loaded ->
@@ -145,6 +148,8 @@ proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
       shuttle_travel[id].start = curr_station;
       shuttle_travel[id].dir = 0 ;
 
+      // printf("4Shuttle %d: finished order %d\n", id, curr_order);
+
       curr_order = curr_order + 1;
       are_passengers_loaded = false;
     
@@ -152,15 +157,20 @@ proctype Shuttle(byte idx; byte start_station; int capacity; int charge) {
       /* Set direction to travel to start */      
       if :: (shuttle_travel[id].dir == 0 ) -> 
         set_direction(curr_station, orders[curr_order].start); 
+        // printf("1Shuttle %d: start dir= %d\n", id, shuttle_travel[id].dir);
+
       :: else
       fi
+      
+      // printf("2Shuttle %d: travelling\n", id);
       
       /* Travel to order start/dest */
       atomic {
         can_travel = true;
         for (i : 0 .. 3 - 1) {
           if :: (shuttle_travel[i].start == curr_station 
-            && shuttle_travel[i].dir == shuttle_travel[id].dir) ->
+            && shuttle_travel[i].dir == shuttle_travel[id].dir
+            && i != id) ->
             can_travel = false;
           :: else
           fi
@@ -190,9 +200,9 @@ proctype System() {
   Order o;
   mtype msg;
 
-  byte i, id, max_id[2], num_responded[2];
+  byte i, id, min_id[2], num_responded[2];
   bool has_assigned[2];
-  int max_payment[2], payment, idx;
+  int min_payment[2], payment, idx;
   int num_orders = 0;
   Order orders[2];
   
@@ -205,7 +215,7 @@ proctype System() {
       orders[num_orders].dest = o.dest;
       orders[num_orders].size = o.size;
       
-      max_payment[num_orders] = -1;
+      min_payment[num_orders] = 1000000;
       num_responded[num_orders] = 0;
 
       num_orders = num_orders + 1;
@@ -228,13 +238,13 @@ proctype System() {
 
       if
       :: (msg == OFFER) ->
-        if :: (max_payment[idx] == -1) ->
-          max_id[idx] = id;
-          max_payment[idx] = payment;
+        if :: (min_payment[idx] == 1000000) ->
+          min_id[idx] = id;
+          min_payment[idx] = payment;
         :: else ->
-          if :: (payment > max_payment[idx]) -> // If equal, don't assign to the later offer
-            max_id[idx] = id;
-            max_payment[idx] = payment;
+          if :: (payment < min_payment[idx]) -> // If equal, don't assign to the later offer
+            min_id[idx] = id;
+            min_payment[idx] = payment;
           :: else
           fi
         fi
@@ -246,17 +256,17 @@ proctype System() {
       
     fi
 
-    /* Assign order to an offer */
-    :: (!has_assigned[0] || !has_assigned[1]) ->
-      for (i : 0 .. num_orders - 1) {
-        if :: (num_responded[i] == 3) ->
-          shuttle_chan[max_id[i]] ! ASSIGN_ORDER, orders[i];
-          has_assigned[i] = true;
-        :: else 
-        fi
-      }
-      
+  /* Assign order to an offer */
+  :: (!has_assigned[0] || !has_assigned[1]) ->
+    for (i : 0 .. num_orders - 1) {
+      if :: (num_responded[i] == 3 && !has_assigned[i]) ->
+        shuttle_chan[min_id[i]] ! ASSIGN_ORDER, orders[i];
+        has_assigned[i] = true;
+      :: else 
+      fi
+    }
   od
+
 }
 
 init {
