@@ -65,21 +65,13 @@ proctype Client(byte id)
         :: (resp == ACK) -> skip;
         fi
 
-    :: (client_status[id] == IDLE) -> 
-        printf("!!!==Client %d: IDLE\n", id);
-
     :: client_chan[id] ? req ->
         if
         :: (client_status[id] == INITIALIZING) -> {
-            // printf("%d: INIT Waiting\n", id);
-            // client_chan[id] ? req; 
-            printf("%d: INIT Get Received\n", id);
-
             /* Step A4a. Client response to Get New Weather info */
             if :: (req == GET_NEW_WEATHER_REQ) -> {
                 set_is_successful();
                 cm_chan ! GET_NEW_WEATHER_RESP, id, is_successful;
-            printf("%d: INIT Sent\n", id);
             }
             
             :: else ->
@@ -89,10 +81,6 @@ proctype Client(byte id)
         }
 
         :: (client_status[id] == POST_INITIALIZING) ->
-            // printf("%d: INIT Waiting \n", id);
-            // client_chan[id] ? req; 
-            printf("%d: POST Use Received %d\n", id, req);
-
             // do
             // :: client_chan[id] ? req
             // :: timeout -> break
@@ -112,13 +100,7 @@ proctype Client(byte id)
                 printf("Error: not USE \n");
                 skip;
             fi;
-            printf("%d: POST Use done\n", id);
-        
         fi
-
-    :: else ->
-        ;
-		// break
   od
 }
 
@@ -149,7 +131,6 @@ proctype CM()
 
       /* Step A4b. CM action to client response for Get New Weather info */
       :: (cm_status == INITIALIZING && id == client_id && req == GET_NEW_WEATHER_RESP) ->
-          printf("CM: rec get = %d from %d\n", val, id);
           if :: (val == 1) ->
               atomic { // FIXME:
                   client_chan[client_id] ! USE_NEW_WEATHER_REQ;
@@ -167,11 +148,14 @@ proctype CM()
 
       /* Step A5b. CM action to client response for Get New Weather info */
       :: (cm_status == POST_INITIALIZING && id == client_id && req == USE_NEW_WEATHER_RESP) ->
-          printf("CM: POST rec Use");
           if :: (val == 1) ->
               cm_status = IDLE;
               client_status[client_id] = IDLE;
               wcp_status = ENABLED;
+
+              connected_clients[num_connected_clients] = client_id;
+              num_connected_clients = num_connected_clients + 1;
+
               client_id = DUMMY_VAL;
 
           :: else ->
@@ -187,7 +171,6 @@ proctype CM()
   :: (cm_status == PRE_INITIALIZING) ->
       atomic { // FIXME:
           client_chan[client_id] ! GET_NEW_WEATHER_REQ;
-          printf("CM: PRE sent\n");
           cm_status = INITIALIZING;
           client_status[client_id] = INITIALIZING;
       }
