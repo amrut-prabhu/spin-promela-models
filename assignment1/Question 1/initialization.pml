@@ -1,4 +1,6 @@
 mtype = { 
+  UPDATED_WEATHER,
+
   /*14*/ IDLE, /* CM and for connected clients*/
   /*13*/ PRE_INITIALIZING,
   /*12*/ INITIALIZING,
@@ -20,6 +22,8 @@ mtype = {
   /*1*/ NACK,
 }
 
+#define DUMMY_VAL 100
+
 /* Each client uses one data channel and one ack channel for communication with WCP*/
 chan cm_chan = [1] of { mtype, byte, byte };
 chan client_chan[3] = [1] of { mtype };
@@ -29,52 +33,87 @@ mtype cm_status = IDLE;
 mtype wcp_status = ENABLED;
 mtype client_status[3] = DISCONNECTED;
 
+inline set_is_successful() {
+  is_successful = DUMMY_VAL;
+  do
+  :: is_successful == DUMMY_VAL ->
+      if
+      :: is_successful = 1
+      :: is_successful = 0
+      fi
+  :: else ->
+      break;
+  od
+}
+
 proctype Client(byte id)
 {
   // TODO: Should have its own status?
+  byte is_successful;
+  mtype req;
+  mtype resp;
 
-  L1: do 
-    /* Step 1. Connection request */
+  // L1: do 
+  do 
+    /* Step A1. Connection request */
     :: (client_status[id] == DISCONNECTED) -> 
-        cm_chan ! CONNECT_REQ, id, 0; // Dummy val 
+        cm_chan ! CONNECT_REQ, id, DUMMY_VAL;
 
-        mtype resp;
         client_chan[id] ? resp;
         if
         :: (resp == NACK) -> client_status[id] = DISCONNECTED;
-        :: (resp == ACK) -> client_status[id] = PRE_INITIALIZING;
+        :: (resp == ACK) -> skip;
         fi
 
-    :: (client_status[id] == PRE_INITIALIZING  || client_status[id] == INITIALIZING) ->
-        mtype req;
-        // do
-        // :: client_chan[id] ? req
-        // :: timeout -> break
-        // od
-        /* needs timeout for the case when CM disconnects client (if isSuccessful is 0) */
-        client_chan[id] ? req; 
+    :: (client_status[id] == IDLE) -> 
+        printf("!!!==Client %d: IDLE\n", id);
 
-        byte isSuccessful = 100;
-        do
-        :: isSuccessful == 100 ->
-            if
-            :: isSuccessful = 1
-            :: isSuccessful = 0
-            fi
-        :: else ->
-            break
-        od
-
+    :: client_chan[id] ? req ->
         if
-        /* Step 4a. Client response to Get New Weather info */
-        :: (req == GET_NEW_WEATHER_REQ) -> 
-            cm_chan ! GET_NEW_WEATHER_RESP, id, isSuccessful;
+        :: (client_status[id] == INITIALIZING) -> {
+            // printf("%d: INIT Waiting\n", id);
+            // client_chan[id] ? req; 
+            printf("%d: INIT Get Received\n", id);
 
-        /* Step 5. Client response to Get New Weather info */
-        :: (req == USE_NEW_WEATHER_REQ) -> 
-            cm_chan ! USE_NEW_WEATHER_RESP, id, isSuccessful;
+            /* Step A4a. Client response to Get New Weather info */
+            if :: (req == GET_NEW_WEATHER_REQ) -> {
+                set_is_successful();
+                cm_chan ! GET_NEW_WEATHER_RESP, id, is_successful;
+            printf("%d: INIT Sent\n", id);
+            }
+            
+            :: else ->
+                printf("Error: not GET \n");
+                skip;
+            fi;
+        }
+
+        :: (client_status[id] == POST_INITIALIZING) ->
+            // printf("%d: INIT Waiting \n", id);
+            // client_chan[id] ? req; 
+            printf("%d: POST Use Received %d\n", id, req);
+
+            // do
+            // :: client_chan[id] ? req
+            // :: timeout -> break
+            // od
+            /* needs timeout for the case when CM disconnects client (if is_successful is 0) */
+
+            /* Step A5a. Client response to Get New Weather info */
+            if :: (req == USE_NEW_WEATHER_REQ) -> {
+                set_is_successful();
+                cm_chan ! USE_NEW_WEATHER_RESP, id, is_successful;
+            }
+            
+            /* Step A4b. Disconnected */
+            :: (req == NACK) -> skip; //goto L1 // FIXME:
+            
+            :: else ->
+                printf("Error: not USE \n");
+                skip;
+            fi;
+            printf("%d: POST Use done\n", id);
         
-        :: (req == NACK) -> goto L1
         fi
 
     :: else ->
@@ -85,15 +124,17 @@ proctype Client(byte id)
 
 proctype CM()
 {
-  byte client_id = 100;
-  
+  byte client_id = DUMMY_VAL; // current client being connected
+  byte num_connected_clients;
+  byte connected_clients[3] = DUMMY_VAL;
+
   mtype req;
   byte id, val;
 
   do
   :: cm_chan ? req, id, val -> 
       if 
-      /* Step 2. Connection response */
+      /* Step A2. Connection response */
       :: (req == CONNECT_REQ) ->
           if :: (cm_status == IDLE) -> 
               cm_status = PRE_INITIALIZING;
@@ -103,44 +144,53 @@ proctype CM()
 
               client_chan[id] ! ACK;
           :: else -> 
-              client_chan[id] ! NACK;
+              client_chan[id] ! NACK; // refuse the connection
           fi
 
-      /* Step 4b. CM action to client response for Get New Weather info */
+      /* Step A4b. CM action to client response for Get New Weather info */
       :: (cm_status == INITIALIZING && id == client_id && req == GET_NEW_WEATHER_RESP) ->
+          printf("CM: rec get = %d from %d\n", val, id);
           if :: (val == 1) ->
-              client_chan[client_id] ! USE_NEW_WEATHER_REQ;
-              cm_status = POST_INITIALIZING;
-              client_status[client_id] = POST_INITIALIZING;
+              atomic { // FIXME:
+                  client_chan[client_id] ! USE_NEW_WEATHER_REQ;
+                  cm_status = POST_INITIALIZING;
+                  client_status[client_id] = POST_INITIALIZING;
+              }
 
           :: else ->
-              client_chan[client_id] ! NACK; //
+            //   client_chan[client_id] ! NACK; // FIXME:
               client_status[client_id] = DISCONNECTED;
               cm_status = IDLE;
+              client_id = DUMMY_VAL;
+              // FIXME: Enable WCP?
           fi
 
-      /* Step 5b. CM action to client response for Get New Weather info */
+      /* Step A5b. CM action to client response for Get New Weather info */
       :: (cm_status == POST_INITIALIZING && id == client_id && req == USE_NEW_WEATHER_RESP) ->
+          printf("CM: POST rec Use");
           if :: (val == 1) ->
               cm_status = IDLE;
               client_status[client_id] = IDLE;
               wcp_status = ENABLED;
-              client_id = 100;
+              client_id = DUMMY_VAL;
 
           :: else ->
               client_status[client_id] = DISCONNECTED;
               wcp_status = ENABLED;
               cm_status = IDLE;
-              client_id = 100;
+              client_id = DUMMY_VAL;
           fi
 
       fi
 
-  /* Step 3. Pre-init Get New Weather info */
+  /* Step A3. Pre-init Get New Weather info */
   :: (cm_status == PRE_INITIALIZING) ->
-      client_chan[client_id] ! GET_NEW_WEATHER_REQ;
-      cm_status = INITIALIZING;
-      client_status[client_id] = INITIALIZING;
+      atomic { // FIXME:
+          client_chan[client_id] ! GET_NEW_WEATHER_REQ;
+          printf("CM: PRE sent\n");
+          cm_status = INITIALIZING;
+          client_status[client_id] = INITIALIZING;
+      }
 
   // TODO: Timeouts for all receives?
   /* 
@@ -151,22 +201,16 @@ proctype CM()
   od
 }
 
-// proctype WCP()
-// {
-//   mtype wcp_status = ENABLED;
-//   mtype status;
-  
-//   do
-//   :: wcp_chan ? status;
-//     wcp_status = status;
-
-// //   :: (wcp_status == ENABLED) ->
-// //     if :: (cm_chan ?? [UPDATED_WEATHER, DUMMY_VAL] == false) ->
-// //         cm_chan ! UPDATED_WEATHER, DUMMY_VAL;
-// //     :: else
-// //     fi
-//   od
-// }
+proctype WCP()
+{
+  do
+  :: (wcp_status == ENABLED) ->
+    if :: (cm_chan ?? [UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL] == false) ->
+        cm_chan ! UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL;
+    :: else
+    fi
+  od
+}
 
 init {
   atomic {
