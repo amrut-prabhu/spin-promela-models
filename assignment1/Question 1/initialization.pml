@@ -151,9 +151,44 @@ proctype CM()
   od
 }
 
+// proctype WCP()
+// {
+//   mtype wcp_status = ENABLED;
+//   mtype status;
+  
+//   do
+//   :: wcp_chan ? status;
+//     wcp_status = status;
+
+// //   :: (wcp_status == ENABLED) ->
+// //     if :: (cm_chan ?? [UPDATED_WEATHER, DUMMY_VAL] == false) ->
+// //         cm_chan ! UPDATED_WEATHER, DUMMY_VAL;
+// //     :: else
+// //     fi
+//   od
+// }
+
 init {
-  run CM(); 
-  run Client(0); 
-  run Client(1); 
-  run Client(2)
+  atomic {
+    run CM();
+    // run WCP();
+
+    run Client(0); 
+    run Client(1); 
+    run Client(2)
+  }
 }
+
+// active proctype monitor()
+// {
+//     do
+//         :: true -> assert(client_status[0] != IDLE && client_status[1] != IDLE && client_status[2] != IDLE);
+//     od;
+// }
+
+#define p0 client_status[0] == IDLE
+#define p1 client_status[1] == IDLE
+#define p2 client_status[2] == IDLE
+
+ltl v1 { []<>(p0 && p1 && p2) }
+
