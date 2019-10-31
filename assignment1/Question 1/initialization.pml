@@ -1,5 +1,13 @@
 mtype = { 
-  UPDATED_WEATHER,
+  /*19*/ POST_REVERTING, 
+  /*18*/ POST_UPDATING,
+  /*17*/ UPDATING,
+  /*16*/ PRE_UPDATING,
+
+    /*4*/ USE_OLD_WEATHER_REQ, 
+  /*3*/ USE_OLD_WEATHER_RESP,
+
+  /*15*/ USER_UPDATED_WEATHER, /* WCP message */ 
 
   /*14*/ IDLE, /* CM and for connected clients*/
   /*13*/ PRE_INITIALIZING,
@@ -67,8 +75,8 @@ proctype Client(byte id)
 
     :: client_chan[id] ? req ->
         if
-        :: (client_status[id] == INITIALIZING) -> {
-            /* Step A4a. Client response to Get New Weather info */
+        /* Step A4a. B4a. Client response to Get New Weather info */
+        :: (client_status[id] == INITIALIZING  || client_status[id] == UPDATING) -> {
             if :: (req == GET_NEW_WEATHER_REQ) -> {
                 set_is_successful();
                 cm_chan ! GET_NEW_WEATHER_RESP, id, is_successful;
@@ -80,39 +88,109 @@ proctype Client(byte id)
             fi;
         }
 
-        :: (client_status[id] == POST_INITIALIZING) ->
+        /* Step A5a. B5a. Client response to Use New Weather info */
+        :: (client_status[id] == POST_INITIALIZING || client_status[id] == POST_UPDATING) ->
             // do
             // :: client_chan[id] ? req
             // :: timeout -> break
             // od
             /* needs timeout for the case when CM disconnects client (if is_successful is 0) */
 
-            /* Step A5a. Client response to Get New Weather info */
             if :: (req == USE_NEW_WEATHER_REQ) -> {
                 set_is_successful();
                 cm_chan ! USE_NEW_WEATHER_RESP, id, is_successful;
             }
             
             /* Step A4b. Disconnected */
-            :: (req == NACK) -> skip; //goto L1 // FIXME:
+            :: (req == NACK) -> skip; //goto L1 // FIXME: not needed?
             
             :: else ->
                 printf("Error: not USE \n");
                 skip;
             fi;
-        fi
+
+        /* Step B6a. Client response to Use Old Weather info */
+        :: (client_status[id] == POST_REVERTING) -> 
+            if :: (req == USE_OLD_WEATHER_REQ) -> {
+                set_is_successful();
+                cm_chan ! USE_OLD_WEATHER_RESP, id, is_successful;
+            }
+            
+            :: else ->
+                printf("Error: not USE \n");
+                skip;
+            fi;
+
+        fi /* end branching on request type */
   od
+}
+
+inline message_connected_clients(msg) {
+  for (i : 0..2) { // TODO: num_connected_clients - 1
+    id = connected_clients[i];
+    if :: (id < 3) ->
+      client_chan[id] ! msg;
+    :: else
+    fi
+  }   
+}
+
+inline set_connected_clients_status(status) {
+  for (i : 0..2) { // TODO: num_connected_clients - 1
+    id = connected_clients[i];
+
+    if :: (id < 3) ->
+      client_status[id] = status;
+    :: else
+    fi
+  }   
+}
+
+inline check_are_all_successful() {
+    are_all_successful = true;   
+
+    for (i : 0..2) { /* TODO: */
+      id = connected_clients[i];
+
+      if :: (id < 3 && connected_clients_responses[i] == 0) ->
+          are_all_successful = false;
+      :: else
+      fi
+
+      connected_clients_responses[i] = DUMMY_VAL;
+    }
+
+    num_connected_clients_responses = 0;
+}
+
+inline disconnect_connected_clients() {
+  for (i : 0..2) {
+    id = connected_clients[i];
+
+    if :: (id < 3) -> 
+      client_status[id] = DISCONNECTED;
+    :: else
+    fi
+
+    connected_clients[i] = DUMMY_VAL;
+  }
+
+  num_connected_clients = 0;
 }
 
 proctype CM()
 {
   byte client_id = DUMMY_VAL; // current client being connected
-  byte num_connected_clients;
+  byte num_connected_clients = 0;
   byte connected_clients[3] = DUMMY_VAL;
 
-  mtype req;
-  byte id, val;
+  byte num_connected_clients_responses = 0;
+  byte connected_clients_responses[3] = DUMMY_VAL;
 
+  mtype req;
+  byte id, val, i;
+  bool are_all_successful;
+  
   do
   :: cm_chan ? req, id, val -> 
       if 
@@ -165,7 +243,100 @@ proctype CM()
               client_id = DUMMY_VAL;
           fi
 
-      fi
+
+      /* Step B2. CM action to client response for Get New Weather info */
+      :: (req == USER_UPDATED_WEATHER) ->
+          // Prevent any further update requests by WCP before completion of current update
+          if :: (cm_status == IDLE) ->
+              atomic {
+                cm_status = PRE_UPDATING;
+                set_connected_clients_status(PRE_UPDATING);
+                wcp_status = DISABLED; 
+              }
+
+              // FIXME:? move the next 3 blocks for response collection into PRE_UPDATING?
+              if :: (num_connected_clients == 0) ->
+                  cm_status = IDLE;
+                  wcp_status = ENABLED; // FIXME:
+              :: else
+              fi
+
+          :: else
+          fi
+
+      :: (cm_status == UPDATING && req == GET_NEW_WEATHER_RESP) ->
+          connected_clients_responses[num_connected_clients_responses] = val;
+          num_connected_clients_responses = num_connected_clients_responses + 1;
+
+          /* Step B4. Process Get New Weather info results */  
+          if :: (num_connected_clients_responses == num_connected_clients) ->
+              check_are_all_successful();
+
+              if :: are_all_successful ->
+                  atomic {
+                    message_connected_clients(USE_NEW_WEATHER_REQ);
+                    cm_status = POST_UPDATING;
+                    set_connected_clients_status(POST_UPDATING);
+                  }
+
+              :: else ->
+                  atomic {
+                    message_connected_clients(USE_OLD_WEATHER_REQ);
+                    cm_status = POST_REVERTING;
+                    set_connected_clients_status(POST_REVERTING);
+                  }
+              fi
+
+          :: else
+          fi
+
+      :: (cm_status == POST_UPDATING && req == USE_NEW_WEATHER_RESP) ->
+          connected_clients_responses[num_connected_clients_responses] = val;
+          num_connected_clients_responses = num_connected_clients_responses + 1;
+
+          /* Step B5. Process Use New Weather info results */  
+          if :: (num_connected_clients_responses == num_connected_clients) ->
+              check_are_all_successful();
+
+              if :: are_all_successful ->
+                  cm_status = IDLE;
+                  set_connected_clients_status(IDLE);
+                  wcp_status = ENABLED;
+
+              :: else ->
+                  disconnect_connected_clients();
+                  wcp_status = ENABLED;
+                  cm_status = IDLE;
+              fi
+
+          :: else
+          fi
+
+      :: (cm_status == POST_REVERTING && req == USE_OLD_WEATHER_RESP) ->
+          connected_clients_responses[num_connected_clients_responses] = val;
+          num_connected_clients_responses = num_connected_clients_responses + 1;
+
+          /* Step B6. Process Old New Weather info results */  
+          if :: (num_connected_clients_responses == num_connected_clients) ->
+              check_are_all_successful();
+
+              if :: are_all_successful ->
+                  cm_status = IDLE;
+                  set_connected_clients_status(IDLE);
+                  wcp_status = ENABLED;
+
+              :: else ->
+                  disconnect_connected_clients();
+                  wcp_status = ENABLED;
+                  cm_status = IDLE;
+              fi
+
+          :: else
+          fi
+
+      fi; /* end branching on request type */
+
+
 
   /* Step A3. Pre-init Get New Weather info */
   :: (cm_status == PRE_INITIALIZING) ->
@@ -173,6 +344,14 @@ proctype CM()
           client_chan[client_id] ! GET_NEW_WEATHER_REQ;
           cm_status = INITIALIZING;
           client_status[client_id] = INITIALIZING;
+      }
+
+  /* Step B3. Pre-upd Get New Weather info */
+  :: (cm_status == PRE_UPDATING) ->
+      atomic { // TODO: needed?
+          message_connected_clients(GET_NEW_WEATHER_REQ);
+          cm_status = UPDATING;
+          set_connected_clients_status(UPDATING);
       }
 
   // TODO: Timeouts for all receives?
@@ -188,8 +367,15 @@ proctype WCP()
 {
   do
   :: (wcp_status == ENABLED) ->
-    if :: (cm_chan ?? [UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL] == false) ->
-        cm_chan ! UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL;
+    /* Step B1. Send update message to CM */
+    if :: (cm_chan ? [USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL] == false) ->
+        // Remove unread message from buffer and send a new one
+        // TODO: violates q2?
+        if :: (wcp_status == ENABLED) ->
+            cm_chan ! USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL;
+        :: else
+        fi
+
     :: else
     fi
   od
@@ -198,7 +384,7 @@ proctype WCP()
 init {
   atomic {
     run CM();
-    // run WCP();
+    run WCP();
 
     run Client(0); 
     run Client(1); 
