@@ -33,6 +33,9 @@ mtype = {
 
 bool are_all_new_successful;
 
+#define isLatestSent (cm_chan ? <USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL>)
+
+
 chan client_chan[3] = [1] of { mtype };
 chan cm_chan = [1] of { mtype, byte, byte };
 
@@ -92,9 +95,6 @@ proctype Client(byte id)
             cm_chan ! USE_NEW_WEATHER_RESP, id, is_successful;
         }
 
-        /* Step A4b. Disconnected */
-        :: (req == NACK) -> skip; // FIXME: not needed?
-        
         :: else
         fi
 
@@ -220,7 +220,6 @@ proctype CM()
         }
 
       :: else ->
-        //   client_chan[client_id] ! NACK; // FIXME:
         client_status[client_id] = DISCONNECTED;
         cm_status = IDLE;
         client_id = DUMMY_VAL;
@@ -257,10 +256,9 @@ proctype CM()
           wcp_status = DISABLED; 
         }
 
-        // FIXME:? move the next 3 blocks for response collection into PRE_UPDATING?
         if :: (num_connected_clients == 0) ->
           cm_status = IDLE;
-          wcp_status = ENABLED; // FIXME:
+          wcp_status = ENABLED;
         :: else
         fi
 
@@ -348,7 +346,7 @@ proctype CM()
 
   /* Step B3. Pre-upd Get New Weather info */
   :: (cm_status == PRE_UPDATING) ->
-    atomic { // TODO: needed?
+    atomic { 
       message_connected_clients(GET_NEW_WEATHER_REQ);
       cm_status = UPDATING;
       set_connected_clients_status(UPDATING);
@@ -363,7 +361,6 @@ proctype WCP()
     /* Step B1. Send update message to CM */
     if :: (cm_chan ? [USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL] == false) ->
       // Remove unread message from buffer and send a new one
-      // TODO: violates q2?
       if :: (wcp_status == ENABLED) ->
         cm_chan ! USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL;
       :: else
@@ -385,6 +382,4 @@ init {
   }
 }
 
-#define isLatestSent (cm_chan ? <USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL>)
-
-ltl p1 { [] (isLatestSent -> <> are_all_new_successful ) }
+ltl p1 { [] (isLatestSent -> <> (are_all_new_successful) ) }
