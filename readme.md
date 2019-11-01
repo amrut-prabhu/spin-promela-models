@@ -19,16 +19,16 @@ State after 10000 steps:
 Comment the `atomic` nature in lines 217 and 221 of `weather.pml`. 
 (under `:: (cm_status == INITIALIZING && id == client_id && req == GET_NEW_WEATHER_RESP) ->`)
 
-Then, check for deadlocks using iSpin "Verification". 
+Then, check for deadlocks using iSpin "Verification" and the "+ invalid endstates (deadlock)" option. 
 It generates an error trail.
 This trail can be viewed in `weather-deadlock.pml`.
 
 ## Part 4
 
-Run using iSpin "Verification".
+Run the original code using iSpin "Verification".
 
 Select the `safety` radio button, and check the `+ invalid endstates (deadlock)` option.
-
+It does not find any errors.
 
 
 # Question 2
