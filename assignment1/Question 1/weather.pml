@@ -85,7 +85,7 @@ proctype Client(byte id)
         }
           
         :: else ->
-          printf("===Error: req=%d (should be 8)\n", req);
+          printf("===Error: req=%d (should be 8- GET_NEW_WEATHER_REQ)\n", req); 
         fi
       }
 
@@ -214,7 +214,7 @@ proctype CM()
     /* Step A4b. CM action to client response for Get New Weather info */
     :: (cm_status == INITIALIZING && id == client_id && req == GET_NEW_WEATHER_RESP) ->
       if :: (val == 1) ->
-        atomic { // FIXME:
+        atomic {
           client_chan[client_id] ! USE_NEW_WEATHER_REQ;
           cm_status = POST_INITIALIZING;
           client_status[client_id] = POST_INITIALIZING;
