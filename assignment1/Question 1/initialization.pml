@@ -54,7 +54,6 @@ inline set_is_successful() {
 
 proctype Client(byte id)
 {
-  // TODO: Should have its own status?
   byte is_successful;
   mtype req;
   mtype resp;
@@ -80,30 +79,22 @@ proctype Client(byte id)
           cm_chan ! GET_NEW_WEATHER_RESP, id, is_successful;
         }
           
-        :: else ->
-          printf("Error: not GET \n");
-          skip;
-        fi;
+        :: else
+        fi
       }
 
       /* Step A5a. B5a. Client response to Use New Weather info */
       :: (client_status[id] == POST_INITIALIZING || client_status[id] == POST_UPDATING) ->
-        // do
-        // :: client_chan[id] ? req
-        // :: timeout -> break
-        // od
-        /* needs timeout for the case when CM disconnects client (if is_successful is 0) */
-
         if :: (req == USE_NEW_WEATHER_REQ) -> {
             set_is_successful();
             cm_chan ! USE_NEW_WEATHER_RESP, id, is_successful;
         }
+
         /* Step A4b. Disconnected */
         :: (req == NACK) -> skip; //goto L1 // FIXME: not needed?
-        :: else ->
-            printf("Error: not USE \n");
-            skip;
-        fi;
+        
+        :: else
+        fi
 
       /* Step B6a. Client response to Use Old Weather info */
       :: (client_status[id] == POST_REVERTING) -> 
@@ -111,10 +102,8 @@ proctype Client(byte id)
           set_is_successful();
           cm_chan ! USE_OLD_WEATHER_RESP, id, is_successful;
         }
-        :: else ->
-          printf("Error: not USE \n");
-          skip;
-        fi;
+        :: else
+        fi
         
       fi /* end branching on request type */
   od
@@ -345,13 +334,6 @@ proctype CM()
       cm_status = UPDATING;
       set_connected_clients_status(UPDATING);
     }
-
-  // TODO: Timeouts for all receives?
-  /* 
-  :: timeout -> break 
-  A more traditional use is to place a timeout as an alternative to a potentially blocking statement, 
-  to guard against a system deadlock if the statement becomes permanently blocked.
-  */
   od
 }
 
