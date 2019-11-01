@@ -84,7 +84,8 @@ proctype Client(byte id)
           cm_chan ! GET_NEW_WEATHER_RESP, id, is_successful;
         }
           
-        :: else
+        :: else ->
+          printf("===Error: req=%d (should be 8)\n", req);
         fi
       }
 
@@ -338,7 +339,7 @@ proctype CM()
 
   /* Step A3. Pre-init Get New Weather info */
   :: (cm_status == PRE_INITIALIZING) ->
-    atomic { // FIXME:
+    atomic {
       client_chan[client_id] ! GET_NEW_WEATHER_REQ;
       cm_status = INITIALIZING;
       client_status[client_id] = INITIALIZING;
