@@ -31,6 +31,8 @@ mtype = {
 
 #define DUMMY_VAL 100
 
+bool are_all_new_successful;
+
 chan client_chan[3] = [1] of { mtype };
 chan cm_chan = [1] of { mtype, byte, byte };
 
@@ -91,7 +93,7 @@ proctype Client(byte id)
         }
 
         /* Step A4b. Disconnected */
-        :: (req == NACK) -> skip; //goto L1 // FIXME: not needed?
+        :: (req == NACK) -> skip; // FIXME: not needed?
         
         :: else
         fi
@@ -110,7 +112,7 @@ proctype Client(byte id)
 }
 
 inline message_connected_clients(msg) {
-  for (i : 0..2) { // TODO: num_connected_clients - 1
+  for (i : 0..2) {
     id = connected_clients[i];
     if :: (id < 3) ->
       client_chan[id] ! msg;
@@ -120,7 +122,7 @@ inline message_connected_clients(msg) {
 }
 
 inline set_connected_clients_status(status) {
-  for (i : 0..2) { // TODO: num_connected_clients - 1
+  for (i : 0..2) {
     id = connected_clients[i];
 
     if :: (id < 3) ->
@@ -133,11 +135,28 @@ inline set_connected_clients_status(status) {
 inline check_are_all_successful() {
   are_all_successful = true;   
 
-  for (i : 0..2) { /* TODO: */
+  for (i : 0..2) {
     id = connected_clients[i];
 
     if :: (id < 3 && connected_clients_responses[i] == 0) ->
       are_all_successful = false;
+    :: else
+    fi
+
+    connected_clients_responses[i] = DUMMY_VAL;
+  }
+
+  num_connected_clients_responses = 0;
+}
+
+inline check_are_all_new_successful() {
+  are_all_new_successful = true;   
+
+  for (i : 0..2) {
+    id = connected_clients[i];
+
+    if :: (id < 3 && connected_clients_responses[i] == 0) ->
+      are_all_new_successful = false;
     :: else
     fi
 
@@ -279,9 +298,9 @@ proctype CM()
 
       /* Step B5. Process Use New Weather info results */  
       if :: (num_connected_clients_responses == num_connected_clients) ->
-        check_are_all_successful();
+        check_are_all_new_successful(); 
 
-        if :: are_all_successful ->
+        if :: are_all_new_successful -> // For LTL
           cm_status = IDLE;
           set_connected_clients_status(IDLE);
           wcp_status = ENABLED;
@@ -366,3 +385,6 @@ init {
   }
 }
 
+#define isLatestSent (cm_chan ? <USER_UPDATED_WEATHER, DUMMY_VAL, DUMMY_VAL>)
+
+ltl p1 { [] (isLatestSent -> <> are_all_new_successful ) }
